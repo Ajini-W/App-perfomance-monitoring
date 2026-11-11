@@ -1,0 +1,132 @@
+@import "tailwindcss" source(none);
+@source "../src";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+/*
+ * Design system definition.
+ *
+ * The @theme inline block maps CSS custom properties to Tailwind utility
+ * classes (e.g. --color-primary -> bg-primary, text-primary).
+ *
+ * The :root and .dark blocks define the actual color values using oklch.
+ * All colors MUST use oklch format.
+ *
+ * To add a new semantic color:
+ * 1. Add the variable to :root (light value) and .dark (dark value)
+ * 2. Register it in @theme inline as --color-<name>: var(--<name>)
+ */
+
+@theme inline {
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+  --radius-2xl: calc(var(--radius) + 8px);
+  --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-ring-offset-background: var(--background);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --font-display: "Chonburi", Georgia, serif;
+  --font-sans: "Arima Madurai", "Arima", system-ui, sans-serif;
+  --shadow-card: var(--shadow-card);
+}
+
+:root {
+  --radius: 0.75rem;
+  /* Palette: red #CD1C18, peach #FFA896, deep red #9B1313, burgundy #38000A */
+  --background: oklch(0.975 0.012 40);
+  --foreground: oklch(0.2 0.07 15);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.07 15);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.07 15);
+  --primary: oklch(0.55 0.2 28);
+  --primary-foreground: oklch(0.99 0.005 40);
+  --secondary: oklch(0.82 0.1 32);
+  --secondary-foreground: oklch(0.2 0.07 15);
+  --muted: oklch(0.94 0.025 35);
+  --muted-foreground: oklch(0.45 0.07 20);
+  --accent: oklch(0.9 0.06 33);
+  --accent-foreground: oklch(0.42 0.15 25);
+  --destructive: oklch(0.42 0.15 25);
+  --destructive-foreground: oklch(0.99 0.005 40);
+  --border: oklch(0.88 0.04 30);
+  --input: oklch(0.86 0.045 30);
+  --ring: oklch(0.55 0.2 28);
+  --chart-1: oklch(0.55 0.2 28);
+  --chart-2: oklch(0.82 0.1 32);
+  --chart-3: oklch(0.42 0.15 25);
+  --chart-4: oklch(0.2 0.07 15);
+  --chart-5: oklch(0.7 0.12 30);
+  --sidebar: oklch(0.2 0.07 15);
+  --sidebar-foreground: oklch(0.95 0.03 35);
+  --sidebar-primary: oklch(0.82 0.1 32);
+  --sidebar-primary-foreground: oklch(0.2 0.07 15);
+  --sidebar-accent: oklch(0.3 0.09 18);
+  --sidebar-accent-foreground: oklch(0.95 0.03 35);
+  --sidebar-border: oklch(0.32 0.08 18);
+  --sidebar-ring: oklch(0.82 0.1 32);
+  --gradient-brand: linear-gradient(
+    135deg,
+    oklch(0.2 0.07 15),
+    oklch(0.42 0.15 25) 60%,
+    oklch(0.55 0.2 28)
+  );
+  --shadow-card: 0 1px 2px oklch(0.2 0.07 15 / 6%), 0 8px 24px -12px oklch(0.2 0.07 15 / 18%);
+}
+
+@layer base {
+  * {
+    border-color: var(--color-border);
+  }
+
+  body {
+    background-color: var(--color-background);
+    color: var(--color-foreground);
+    font-family: var(--font-sans);
+  }
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-display);
+    font-weight: 400;
+    letter-spacing: -0.01em;
+  }
+}
+
+@utility bg-brand {
+  background-image: var(--gradient-brand);
+}
