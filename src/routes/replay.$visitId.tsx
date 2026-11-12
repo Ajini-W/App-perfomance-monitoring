@@ -2,15 +2,24 @@ import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useRef, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/integrations/supabase/client";
-import type { Tables } from "@/integrations/supabase/types";
+import { getReplayData } from "@/lib/replay-actions";
+import {
+  DEFAULT_MATCH_WINDOW_MS,
+  findActiveSpanKeys,
+  playbackToAbsolute,
+  sameKeys,
+  spanKey,
+  spanOffsetMs,
+} from "@/lib/replay-sync";
 import "rrweb-player/dist/style.css";
 
 export const Route = createFileRoute("/replay/$visitId")({
   head: () => ({
     meta: [
-      { title: "Replay & Telemetry — Replay Console" },
-      { name: "description", content: "Replay a recorded page visit with OpenTelemetry traces." },
+      { title: "Replay segment — Replay Console" },
+      { name: "description", content: "Replay recorded session with OpenTelemetry traces." },
+      { property: "og:title", content: "Replay segment — Replay Console" },
+      { property: "og:description", content: "Replay recorded session with OpenTelemetry traces." },
     ],
   }),
   component: () => <AppShell>{() => <Replay />}</AppShell>,
@@ -18,207 +27,316 @@ export const Route = createFileRoute("/replay/$visitId")({
 
 type RREvent = { type: number; timestamp: number; [k: string]: unknown };
 
-interface TelemetrySpan {
+type TelemetrySpan = {
   id: string;
   trace_id: string;
   span_id: string;
+  parent_span_id?: string | null;
   name: string;
-  kind: string;
+  kind?: string | null;
   status: string;
-  status_code: number | null;
   duration_ms: number;
   start_time: string;
   end_time: string;
-  attributes: Record<string, unknown>;
-}
+  attributes: Record<string, any>;
+};
 
 function Replay() {
   const { visitId } = Route.useParams();
-  const [visit, setVisit] = useState<Tables<"page_visits"> | null>(null);
+  const [visit, setVisit] = useState<any | null>(null);
   const [events, setEvents] = useState<RREvent[] | null>(null);
   const [spans, setSpans] = useState<TelemetrySpan[]>([]);
+  const [spanFilter, setSpanFilter] = useState<"all" | "fetch" | "error" | "nav">("all");
   const [selectedSpan, setSelectedSpan] = useState<TelemetrySpan | null>(null);
-  const [filterKind, setFilterKind] = useState<string>("all");
   const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
   const holder = useRef<HTMLDivElement>(null);
+  const spanList = useRef<HTMLDivElement>(null);
+  // Replay ↔ trace sync: replay start (epoch ms of first rrweb event), player offset, matches.
+  const [replayStart, setReplayStart] = useState<number | null>(null);
+  const [playbackOffset, setPlaybackOffset] = useState(0);
+  const [playerState, setPlayerState] = useState<"playing" | "paused">("paused");
+  const [activeKeys, setActiveKeys] = useState<Set<string>>(() => new Set());
+  const spansRef = useRef<TelemetrySpan[]>([]);
+  spansRef.current = spans;
 
+  // 1. MySQL-ல் இருந்து Visit, rrweb Events மற்றும் OpenTelemetry Spans எடுத்தல்
   useEffect(() => {
     (async () => {
-      const { data: v, error: e1 } = await supabase
-        .from("page_visits")
-        .select("*")
-        .eq("id", visitId)
-        .maybeSingle();
-      if (e1 || !v) return setError("Segment not found or you don't have access to it.");
-      setVisit(v);
-
-      const { data: batches, error: e2 } = await supabase
-        .from("event_batches")
-        .select("seq, events")
-        .eq("visit_id", visitId)
-        .order("seq");
-      if (e2) return setError(e2.message);
-      const all = (batches ?? []).flatMap((b) => b.events as unknown as RREvent[]);
-      all.sort((a, b) => a.timestamp - b.timestamp);
-      setEvents(all);
-
-      // Fetch OpenTelemetry spans
-      const { data: spansData } = await (supabase as any)
-        .from("telemetry_spans")
-        .select("*")
-        .eq("visit_id", visitId)
-        .order("start_time", { ascending: true });
-      if (spansData) {
-        setSpans(spansData as TelemetrySpan[]);
+      try {
+        setLoading(true);
+        const data = await getReplayData({ data: visitId });
+        if (!data || !data.visit) {
+          setError("Session recording not found in MySQL database.");
+          return;
+        }
+        setVisit(data.visit);
+        setEvents(data.events || []);
+        setSpans(data.spans || []);
+      } catch (err: any) {
+        setError(err.message || "Failed to load replay data");
+      } finally {
+        setLoading(false);
       }
     })();
   }, [visitId]);
 
+  // 2. rrweb-player-ஐ இடது பக்க Container-ல் இயக்குதல்
   useEffect(() => {
     if (!events || events.length < 2 || !holder.current) return;
     const el = holder.current;
     let player: { $destroy?: () => void } | null = null;
+
+    let cancelled = false;
+
     import("rrweb-player").then(({ default: RRWebPlayer }) => {
+      if (cancelled) return;
       el.innerHTML = "";
-      const width = Math.min(el.clientWidth, 950);
-      player = new RRWebPlayer({
+      const width = Math.min(el.clientWidth, 800);
+      const instance = new RRWebPlayer({
         target: el,
         props: {
           events: events as never,
           width,
-          height: Math.round(width * 0.56),
+          height: Math.round(width * 0.58),
           autoPlay: false,
           showController: true,
         },
-      }) as never;
+      });
+      player = instance as never;
+
+      // Replay time 0 = first rrweb event; spans carry wall-clock times from the same tab.
+      const start = instance.getMetaData?.().startTime ?? events[0]!.timestamp;
+      setReplayStart(start);
+
+      // Recompute matching spans; only re-render the panel when the set actually changes.
+      let lastOffsetBucket = -1;
+      const sync = (offset: number) => {
+        if (cancelled || !Number.isFinite(offset)) return;
+        const abs = playbackToAbsolute(start, offset);
+        const next = findActiveSpanKeys(spansRef.current, abs, DEFAULT_MATCH_WINDOW_MS);
+        setActiveKeys((prev) => (sameKeys(prev, next) ? prev : next));
+        const bucket = Math.floor(offset / 100);
+        if (bucket !== lastOffsetBucket) {
+          lastOffsetBucket = bucket;
+          setPlaybackOffset(offset);
+        }
+      };
+
+      // Fired every animation frame while playing and once after each seek/jump; it does not
+      // fire while paused, so highlighting freezes on pause and jumps immediately on seek.
+      instance.addEventListener("ui-update-current-time", (e: { payload: number }) =>
+        sync(e.payload),
+      );
+      instance.addEventListener("ui-update-player-state", (e: { payload: "playing" | "paused" }) => {
+        if (cancelled) return;
+        setPlayerState(e.payload);
+        sync(instance.getReplayer().getCurrentTime());
+      });
+      sync(0);
     });
+
     return () => {
+      cancelled = true;
       player?.$destroy?.();
     };
   }, [events]);
 
+  // Re-match if spans load/change while the player sits at a position.
+  useEffect(() => {
+    if (replayStart == null) return;
+    const next = findActiveSpanKeys(spans, playbackToAbsolute(replayStart, playbackOffset));
+    setActiveKeys((prev) => (sameKeys(prev, next) ? prev : next));
+  }, [spans, replayStart, playbackOffset]);
+
+  // Keep the first highlighted span visible inside the trace list (without scrolling the page).
+  useEffect(() => {
+    const list = spanList.current;
+    if (!list || activeKeys.size === 0) return;
+    const row = list.querySelector<HTMLElement>('[data-active="true"]');
+    if (!row) return;
+    const top = row.offsetTop;
+    const bottom = top + row.offsetHeight;
+    if (top < list.scrollTop || bottom > list.scrollTop + list.clientHeight) {
+      list.scrollTo({ top: Math.max(0, top - 8), behavior: "smooth" });
+    }
+  }, [activeKeys]);
+
+  // 3. JSON Export (Recording + Telemetry Traces)
   const download = () => {
-    if (!visit || !events) return;
-    const blob = new Blob([JSON.stringify({ visit, events, telemetry: spans }, null, 2)], {
+    if (!visit) return;
+    const blob = new Blob([JSON.stringify({ visit, events, spans }, null, 2)], {
       type: "application/json",
     });
     const a = document.createElement("a");
     a.href = URL.createObjectURL(blob);
-    a.download = `replay-${visit.module_name.replace(/[^a-z0-9]+/gi, "-")}-${visit.id.slice(0, 8)}.json`;
+    a.download = `replay-${(visit.module_name || "session").replace(/[^a-z0-9]+/gi, "-")}-${visit.id.slice(0, 8)}.json`;
     a.click();
     URL.revokeObjectURL(a.href);
   };
 
+  // 4. OpenTelemetry Spans Filtering
   const filteredSpans = spans.filter((s) => {
-    if (filterKind === "all") return true;
-    return s.kind === filterKind;
+    if (spanFilter === "fetch") return s.name.toLowerCase().includes("fetch") || s.name.toLowerCase().includes("http");
+    if (spanFilter === "error") return s.status.toLowerCase() === "error";
+    if (spanFilter === "nav") return s.name.toLowerCase().includes("nav") || s.name.toLowerCase().includes("document");
+    return true;
   });
 
   return (
     <div className="space-y-6">
+      {/* Header Bar */}
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div>
           <Link to="/dashboard" className="text-sm text-primary underline">
             ← All recordings
           </Link>
-          <h1 className="mt-2 text-3xl font-bold">{visit?.module_name ?? "Replay"}</h1>
+          <h1 className="mt-2 text-3xl font-bold">{visit?.module_name ?? "Replay & Traces"}</h1>
           {visit && (
             <p className="text-sm text-muted-foreground">
-              {visit.url} · session {visit.session_id.slice(0, 8)} ·{" "}
-              {new Date(visit.started_at).toLocaleString()} · {visit.event_count} events ·{" "}
-              {spans.length} telemetry spans
+              {visit.url} · Session: <code className="font-mono">{visit.session_id?.slice(0, 8)}</code> ·{" "}
+              {new Date(visit.started_at).toLocaleString()} · {events?.length ?? 0} DOM events ·{" "}
+              {spans.length} OpenTelemetry spans
             </p>
           )}
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" onClick={download} disabled={!events}>
-            Download JSON (with Traces)
-          </Button>
-        </div>
+        <Button onClick={download} disabled={!events?.length && !spans.length}>
+          Download JSON
+        </Button>
       </div>
 
-      {error && <p className="rounded bg-destructive/10 p-3 text-destructive">{error}</p>}
+      {loading && <p className="text-muted-foreground">Loading session replay from MySQL...</p>}
+      {error && <p className="rounded-lg border border-destructive p-4 text-destructive">{error}</p>}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
-        {/* Left: Video Player */}
-        <div className="lg:col-span-2 space-y-4">
-          <div
-            ref={holder}
-            className="flex min-h-[350px] items-center justify-center rounded-lg border bg-black text-white"
-          >
-            {!events && !error && <p className="text-sm text-muted-foreground">Loading replay...</p>}
+      {/* Split View: Player (Left) + OpenTelemetry Traces (Right) */}
+      <div className="grid gap-6 lg:grid-cols-12">
+        {/* Left Column: rrweb Player (8 cols) */}
+        <div className="lg:col-span-7 xl:col-span-8 space-y-3">
+          <div className="rounded-xl border bg-card p-4 shadow-card">
+            <h2 className="mb-3 text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+              Visual Replay (rrweb)
+            </h2>
+            <div ref={holder} className="flex justify-center min-h-[350px] bg-black/5 rounded-lg items-center" />
             {events && events.length < 2 && (
-              <p className="text-sm text-muted-foreground">Not enough events recorded to replay.</p>
+              <p className="p-6 text-center text-sm text-muted-foreground">
+                Not enough DOM events to replay this segment yet.
+              </p>
             )}
+            <p className="mt-3 text-xs text-muted-foreground">
+              Replay rebuilds the UI from recorded DOM mutation events. All sensitive inputs are masked.
+            </p>
           </div>
         </div>
 
-        {/* Right: OpenTelemetry Traces Inspector */}
-        <div className="rounded-lg border bg-card p-4 space-y-4">
-          <div className="flex items-center justify-between border-b pb-2">
-            <h2 className="text-lg font-semibold">Telemetry & Traces</h2>
-            <span className="text-xs text-muted-foreground">{spans.length} captured</span>
-          </div>
+        {/* Right Column: OpenTelemetry Spans Panel (4 cols) */}
+        <div className="lg:col-span-5 xl:col-span-4 space-y-3">
+          <div className="rounded-xl border bg-card p-4 shadow-card">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
+                Telemetry & Traces
+              </h2>
+              <span className="text-xs text-muted-foreground font-mono">
+                {spans.length} captured
+              </span>
+            </div>
 
-          <div className="flex gap-1 text-xs">
-            {["all", "client_request", "error", "navigation"].map((k) => (
-              <button
-                key={k}
-                onClick={() => setFilterKind(k)}
-                className={`rounded px-2 py-1 capitalize ${
-                  filterKind === k ? "bg-primary text-primary-foreground" : "bg-muted"
-                }`}
-              >
-                {k === "client_request" ? "API Calls" : k}
-              </button>
-            ))}
-          </div>
-
-          <div className="max-h-[480px] overflow-y-auto space-y-2 pr-1">
-            {filteredSpans.length === 0 ? (
-              <p className="text-xs text-muted-foreground py-6 text-center">
-                No telemetry spans recorded for this filter.
+            {/* Replay ↔ trace sync status */}
+            {replayStart != null && (
+              <p className="mb-3 text-[11px] font-mono text-muted-foreground" data-testid="replay-sync-status">
+                {playerState === "playing" ? "▶" : "❚❚"} replay +{(playbackOffset / 1000).toFixed(1)}s ·{" "}
+                {activeKeys.size} matching (±{DEFAULT_MATCH_WINDOW_MS / 1000}s)
               </p>
-            ) : (
-              filteredSpans.map((s) => (
-                <div
-                  key={s.id}
-                  onClick={() => setSelectedSpan(selectedSpan?.id === s.id ? null : s)}
-                  className={`cursor-pointer rounded border p-2 text-xs transition ${
-                    selectedSpan?.id === s.id ? "border-primary bg-primary/5" : "hover:bg-muted/50"
+            )}
+
+            {/* Filter Buttons */}
+            <div className="flex flex-wrap gap-1 mb-3">
+              {(["all", "fetch", "error", "nav"] as const).map((f) => (
+                <button
+                  key={f}
+                  onClick={() => setSpanFilter(f)}
+                  className={`px-2.5 py-1 text-xs rounded-md border font-medium transition-colors ${
+                    spanFilter === f
+                      ? "bg-primary text-primary-foreground border-primary"
+                      : "bg-muted/50 hover:bg-muted text-muted-foreground"
                   }`}
                 >
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono font-medium truncate max-w-[180px]">{s.name}</span>
-                    <span
-                      className={`px-1.5 py-0.5 rounded text-[10px] font-bold ${
-                        s.status === "error" || (s.status_code && s.status_code >= 400)
-                          ? "bg-red-500/10 text-red-600"
-                          : "bg-green-500/10 text-green-600"
-                      }`}
-                    >
-                      {s.status_code ? s.status_code : s.status}
-                    </span>
-                  </div>
-                  <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
-                    <span>{s.duration_ms}ms</span>
-                    <span>{new Date(s.start_time).toLocaleTimeString()}</span>
+                  {f === "all" ? "All" : f === "fetch" ? "API Calls" : f === "error" ? "Errors" : "Navigation"}
+                </button>
+              ))}
+            </div>
+
+            {/* Spans List */}
+            <div ref={spanList} className="relative space-y-2 max-h-[500px] overflow-y-auto pr-1">
+              {filteredSpans.map((s) => {
+                const key = spanKey(s);
+                const active = activeKeys.has(key);
+                return (
+                <div
+                  key={key}
+                  data-span-key={key}
+                  data-active={active ? "true" : "false"}
+                  onClick={() => setSelectedSpan(selectedSpan?.span_id === s.span_id ? null : s)}
+                  className={`cursor-pointer rounded-lg border p-2.5 text-xs transition-colors ${
+                    active ? "ring-2 ring-primary/50 " : ""
+                  }${
+                    selectedSpan?.span_id === s.span_id
+                      ? "border-primary bg-accent/40"
+                      : active
+                        ? "border-primary/60 bg-primary/10"
+                        : "hover:bg-muted/50 bg-background"
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-mono font-medium truncate">{s.name}</span>
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      {/* Span start relative to replay time 0 */}
+                      {replayStart != null && (
+                        <span className="font-mono text-[10px] text-muted-foreground">
+                          {(() => {
+                            const off = spanOffsetMs(s, replayStart) / 1000;
+                            return `${off < 0 ? "−" : "+"}${Math.abs(off).toFixed(2)}s`;
+                          })()}
+                        </span>
+                      )}
+                      <span
+                        className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                          s.status?.toLowerCase() === "error"
+                            ? "bg-red-500/20 text-red-600"
+                            : "bg-emerald-500/20 text-emerald-600"
+                        }`}
+                      >
+                        {s.status || "unset"}
+                      </span>
+                      <span className="font-mono text-muted-foreground">{s.duration_ms}ms</span>
+                    </div>
                   </div>
 
-                  {selectedSpan?.id === s.id && (
-                    <div className="mt-2 pt-2 border-t font-mono text-[10px] space-y-1 text-muted-foreground">
-                      <div>Trace: {s.trace_id}</div>
-                      <div>Span: {s.span_id}</div>
-                      {Object.keys(s.attributes).length > 0 && (
-                        <pre className="mt-1 max-h-24 overflow-auto rounded bg-muted/50 p-1 text-[10px]">
-                          {JSON.stringify(s.attributes, null, 2)}
-                        </pre>
+                  {/* Expanded Span Details */}
+                  {selectedSpan?.span_id === s.span_id && (
+                    <div className="mt-2.5 pt-2 border-t space-y-1 text-[11px] font-mono text-muted-foreground bg-muted/30 p-2 rounded">
+                      <div><strong className="text-foreground">Trace ID:</strong> {s.trace_id}</div>
+                      <div><strong className="text-foreground">Span ID:</strong> {s.span_id}</div>
+                      {s.parent_span_id && <div><strong className="text-foreground">Parent:</strong> {s.parent_span_id}</div>}
+                      {s.attributes && Object.keys(s.attributes).length > 0 && (
+                        <div className="mt-1">
+                          <strong className="text-foreground">Attributes:</strong>
+                          <pre className="mt-1 overflow-x-auto text-[10px] max-h-36 p-1.5 bg-background rounded border">
+                            {JSON.stringify(s.attributes, null, 2)}
+                          </pre>
+                        </div>
                       )}
                     </div>
                   )}
                 </div>
-              ))
-            )}
+                );
+              })}
+
+              {!filteredSpans.length && (
+                <p className="text-center text-xs text-muted-foreground py-8">
+                  No telemetry spans found for this filter.
+                </p>
+              )}
+            </div>
           </div>
         </div>
       </div>

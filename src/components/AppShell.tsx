@@ -1,7 +1,6 @@
 import { Link, useNavigate } from "@tanstack/react-router";
 import type { ReactNode } from "react";
 import { Button } from "@/components/ui/button";
-import { supabase } from "@/integrations/supabase/client";
 import { useAuth } from "@/hooks/useAuth";
 
 export function AppShell({
@@ -41,13 +40,13 @@ export function AppShell({
             <Button
               variant="secondary"
               size="sm"
-              onClick={async () => {
-                await supabase.auth.signOut();
+              onClick={() => {
                 navigate({ to: "/login" });
               }}
             >
               Sign out
             </Button>
+
           </div>
         </div>
       </header>

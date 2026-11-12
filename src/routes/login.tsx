@@ -1,10 +1,9 @@
 import { createFileRoute, useNavigate } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { supabase } from "@/integrations/supabase/client";
 
 export const Route = createFileRoute("/login")({
   head: () => ({
@@ -25,26 +24,13 @@ function Login() {
   const [password, setPassword] = useState("");
   const [busy, setBusy] = useState(false);
 
-  useEffect(() => {
-    supabase.auth.getUser().then(({ data }) => data.user && navigate({ to: "/dashboard" }));
-  }, [navigate]);
-
-  const submit = async (e: React.FormEvent) => {
+  // Supabase Auth was removed in the MySQL migration. The console currently runs in local
+  // single-admin mode (see src/hooks/useAuth.ts), so the form simply opens the dashboard.
+  const submit = (e: React.FormEvent) => {
     e.preventDefault();
     setBusy(true);
-    if (mode === "in") {
-      const { error } = await supabase.auth.signInWithPassword({ email, password });
-      if (error) toast.error(error.message);
-      else navigate({ to: "/dashboard" });
-    } else {
-      const { error } = await supabase.auth.signUp({
-        email,
-        password,
-        options: { emailRedirectTo: window.location.origin + "/dashboard" },
-      });
-      if (error) toast.error(error.message);
-      else toast.success("Check your email to confirm your account, then sign in.");
-    }
+    if (mode === "up") toast.success("Local mode: no account needed, opening the console.");
+    navigate({ to: "/dashboard" });
     setBusy(false);
   };
 

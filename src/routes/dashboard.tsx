@@ -5,8 +5,12 @@ import { AppShell } from "@/components/AppShell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { supabase } from "@/integrations/supabase/client";
-import type { Tables } from "@/integrations/supabase/types";
+import {
+  getWebsites,
+  getVisits,
+  addWebsite,
+  updateWebsiteSettings,
+} from "@/lib/replay-actions";
 
 export const Route = createFileRoute("/dashboard")({
   head: () => ({
@@ -20,11 +24,31 @@ export const Route = createFileRoute("/dashboard")({
       },
     ],
   }),
-  component: () => <AppShell>{(auth) => <Dashboard isAdmin={auth.isAdmin} />}</AppShell>,
+  component: () => <AppShell>{(auth) => <Dashboard isAdmin={auth?.isAdmin ?? true} />}</AppShell>,
 });
 
-type Website = Tables<"websites">;
-type Visit = Tables<"page_visits">;
+type Website = {
+  id: string;
+  name: string;
+  site_key: string;
+  allowed_origins: string[];
+  permitted_paths: string[];
+  retention_days: number;
+  created_at: string;
+};
+
+type Visit = {
+  id: string;
+  website_id: string;
+  session_id: string;
+  user_agent?: string;
+  module_name: string;
+  url: string;
+  path: string;
+  started_at: string;
+  ended_at: string | null;
+  event_count: number;
+};
 
 function Dashboard({ isAdmin }: { isAdmin: boolean }) {
   const [sites, setSites] = useState<Website[]>([]);
@@ -34,26 +58,31 @@ function Dashboard({ isAdmin }: { isAdmin: boolean }) {
   const [moduleFilter, setModuleFilter] = useState("");
 
   const loadSites = useCallback(async () => {
-    const { data } = await supabase.from("websites").select("*").order("created_at");
-    setSites(data ?? []);
-    if (data?.length) setSiteId((cur) => cur || data[0]?.id || "");
+    try {
+      const data = await getWebsites();
+      setSites(data ?? []);
+      if (data?.length) {
+        setSiteId((cur) => cur || data[0]?.id || "");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "Failed to load websites");
+    }
   }, []);
 
   const loadVisits = useCallback(async () => {
     if (!siteId) return;
-    const { data, error } = await supabase
-      .from("page_visits")
-      .select("*")
-      .eq("website_id", siteId)
-      .order("started_at", { ascending: false })
-      .limit(500);
-    if (error) toast.error(error.message);
-    setVisits(data ?? []);
+    try {
+      const data = await getVisits({ data: siteId });
+      setVisits(data ?? []);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to load recordings");
+    }
   }, [siteId]);
 
   useEffect(() => {
     loadSites();
   }, [loadSites]);
+
   useEffect(() => {
     loadVisits();
   }, [loadVisits]);
@@ -69,7 +98,7 @@ function Dashboard({ isAdmin }: { isAdmin: boolean }) {
   return (
     <div className="grid gap-8 lg:grid-cols-[280px_1fr]">
       <aside className="space-y-4">
-        <h2 className="text-lg">Websites</h2>
+        <h2 className="text-lg font-semibold">Websites</h2>
         <div className="space-y-2">
           {sites.map((s) => (
             <button
@@ -83,12 +112,12 @@ function Dashboard({ isAdmin }: { isAdmin: boolean }) {
             >
               <div className="font-medium">{s.name}</div>
               <div className="truncate text-xs text-muted-foreground">
-                {s.permitted_paths.join(", ")}
+                {Array.isArray(s.permitted_paths) ? s.permitted_paths.join(", ") : "/*"}
               </div>
             </button>
           ))}
           {!sites.length && (
-            <p className="text-sm text-muted-foreground">No websites you can access.</p>
+            <p className="text-sm text-muted-foreground">No websites registered yet.</p>
           )}
         </div>
         {isAdmin && <AddWebsite onAdded={loadSites} />}
@@ -173,11 +202,7 @@ function Dashboard({ isAdmin }: { isAdmin: boolean }) {
                 {!filtered.length && (
                   <tr>
                     <td colSpan={7} className="px-4 py-10 text-center text-muted-foreground">
-                      No recordings yet. Open the{" "}
-                      <Link to="/demo" className="text-primary underline">
-                        demo website
-                      </Link>
-                      , click around, then refresh.
+                      No recordings yet. Open your target website, interact with it, then click Refresh.
                     </td>
                   </tr>
                 )}
@@ -192,47 +217,60 @@ function Dashboard({ isAdmin }: { isAdmin: boolean }) {
 
 function AddWebsite({ onAdded }: { onAdded: () => void }) {
   const [name, setName] = useState("");
+  const [loading, setLoading] = useState(false);
+
   return (
     <form
       className="space-y-2 rounded-lg border bg-card p-4"
       onSubmit={async (e) => {
         e.preventDefault();
-        const { error } = await supabase.from("websites").insert({ name });
-        if (error) {
-          toast.error(error.message);
-          return;
+        if (!name.trim()) return;
+        setLoading(true);
+        try {
+          await addWebsite({ data: name.trim() });
+          setName("");
+          toast.success("Website added! Configure allowed origins next.");
+          onAdded();
+        } catch (err: any) {
+          toast.error(err.message || "Failed to add website");
+        } finally {
+          setLoading(false);
         }
-        setName("");
-        toast.success("Website added — set its allowed origins next.");
-        onAdded();
       }}
     >
       <Label>Add a website</Label>
       <Input
         value={name}
         onChange={(e) => setName(e.target.value)}
-        placeholder="My shop"
+        placeholder="My website"
         required
       />
-      <Button type="submit" size="sm" className="w-full">
-        Add
+      <Button type="submit" size="sm" className="w-full" disabled={loading}>
+        {loading ? "Adding..." : "Add"}
       </Button>
     </form>
   );
 }
 
 function SiteSettings({ site, onSaved }: { site: Website; onSaved: () => void }) {
-  const [origins, setOrigins] = useState(site.allowed_origins.join(", "));
-  const [paths, setPaths] = useState(site.permitted_paths.join(", "));
-  const [retention, setRetention] = useState(String(site.retention_days));
-  const [grantUser, setGrantUser] = useState("");
+  const [origins, setOrigins] = useState(
+    Array.isArray(site.allowed_origins) ? site.allowed_origins.join(", ") : "*"
+  );
+  const [paths, setPaths] = useState(
+    Array.isArray(site.permitted_paths) ? site.permitted_paths.join(", ") : "/*"
+  );
+  const [retention, setRetention] = useState(String(site.retention_days || 30));
+  const [loading, setLoading] = useState(false);
+
   useEffect(() => {
-    setOrigins(site.allowed_origins.join(", "));
-    setPaths(site.permitted_paths.join(", "));
-    setRetention(String(site.retention_days));
+    setOrigins(Array.isArray(site.allowed_origins) ? site.allowed_origins.join(", ") : "*");
+    setPaths(Array.isArray(site.permitted_paths) ? site.permitted_paths.join(", ") : "/*");
+    setRetention(String(site.retention_days || 30));
   }, [site]);
+
   const host = typeof window === "undefined" ? "" : window.location.origin;
   const snippet = `<script src="${host}/sdk/recorder.js" data-site-key="${site.site_key}" defer></script>`;
+  
   const split = (s: string) =>
     s
       .split(",")
@@ -241,13 +279,13 @@ function SiteSettings({ site, onSaved }: { site: Website; onSaved: () => void })
 
   return (
     <details className="rounded-xl border bg-card p-4 shadow-card">
-      <summary className="cursor-pointer font-display text-lg">
+      <summary className="cursor-pointer font-semibold text-lg">
         Settings & install snippet — {site.name}
       </summary>
       <div className="mt-4 grid gap-4 md:grid-cols-2">
         <div className="space-y-1 md:col-span-2">
           <Label>Install snippet (paste before &lt;/body&gt; on every page)</Label>
-          <pre className="overflow-x-auto rounded-md bg-sidebar p-3 text-xs text-sidebar-foreground">
+          <pre className="overflow-x-auto rounded-md bg-muted p-3 text-xs font-mono">
             {snippet}
           </pre>
         </div>
@@ -256,7 +294,7 @@ function SiteSettings({ site, onSaved }: { site: Website; onSaved: () => void })
           <Input
             value={origins}
             onChange={(e) => setOrigins(e.target.value)}
-            placeholder="https://shop.example.com"
+            placeholder="http://localhost:8080"
           />
         </div>
         <div className="space-y-1">
@@ -278,54 +316,29 @@ function SiteSettings({ site, onSaved }: { site: Website; onSaved: () => void })
         </div>
         <div className="flex items-end">
           <Button
+            disabled={loading}
             onClick={async () => {
-              const { error } = await supabase
-                .from("websites")
-                .update({
-                  allowed_origins: split(origins),
-                  permitted_paths: split(paths),
-                  retention_days: Math.max(1, Number(retention) || 30),
-                })
-                .eq("id", site.id);
-              if (error) toast.error(error.message);
-              else {
-                toast.success("Saved");
+              setLoading(true);
+              try {
+                await updateWebsiteSettings({
+                  data: {
+                    id: site.id,
+                    origins: split(origins),
+                    paths: split(paths),
+                    retention: Math.max(1, Number(retention) || 30),
+                  },
+                });
+                toast.success("Settings saved successfully!");
                 onSaved();
+              } catch (err: any) {
+                toast.error(err.message || "Failed to update settings");
+              } finally {
+                setLoading(false);
               }
             }}
           >
-            Save settings
+            {loading ? "Saving..." : "Save settings"}
           </Button>
-        </div>
-        <div className="space-y-1 md:col-span-2">
-          <Label>Grant a teammate view access to this website (their user ID)</Label>
-          <div className="flex gap-2">
-            <Input
-              value={grantUser}
-              onChange={(e) => setGrantUser(e.target.value)}
-              placeholder="user UUID shown on their 'Waiting for access' screen"
-            />
-            <Button
-              variant="secondary"
-              onClick={async () => {
-                const uid = grantUser.trim();
-                const r1 = await supabase
-                  .from("user_roles")
-                  .upsert({ user_id: uid, role: "viewer" }, { onConflict: "user_id,role" });
-                const r2 = await supabase
-                  .from("website_access")
-                  .upsert({ user_id: uid, website_id: site.id });
-                const err = r1.error ?? r2.error;
-                if (err) toast.error(err.message);
-                else {
-                  toast.success("Access granted");
-                  setGrantUser("");
-                }
-              }}
-            >
-              Grant
-            </Button>
-          </div>
         </div>
       </div>
     </details>

@@ -1,29 +1,53 @@
-# Welcome to your Lovable project
+# Replay Console — local setup (MySQL)
 
-This project was built with [Lovable](https://lovable.dev).
+rrweb session replay + OpenTelemetry traces, stored in MySQL.
 
-## Build with Lovable
+## Requirements
+- Node.js 20.12+ (22 LTS recommended) and npm
+- MySQL 8.x running locally
 
-Open your project in the [Lovable editor](https://lovable.dev) and keep building.
+## 1. Create the database
+```bash
+mysql -u root -p < database/mysql-schema.sql
+```
+This creates the `replay_console` database, the tables the app uses
+(`websites`, `visits`, `replay_chunks`, `telemetry_spans`) and the built-in
+"Demo Shop" website (`site_key = demo-site-key`).
+If you use a different database name, edit the first two lines of the file.
 
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: connect the project to GitHub and every change made in Lovable is committed straight to your repository.
-- **Full ownership**: this code is yours. Push to your repository and your changes sync back into Lovable, ready for your next prompt.
+## 2. Configure
+```bash
+cp .env.example .env      # Windows: copy .env.example .env
+```
+Fill in `MYSQL_HOST`, `MYSQL_PORT`, `MYSQL_USER`, `MYSQL_PASSWORD`, `MYSQL_DATABASE`.
+`.env` is read by `vite.config.ts` at startup — restart the dev server after editing it.
 
-## Development
-
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
-
-```sh
-git clone <this-repository-url>
-cd <repository-name>
-npm i
+## 3. Install and run
+```bash
+npm install
 npm run dev
 ```
+Open http://localhost:8080 (Vite picks the next free port if 8080 is busy — check the terminal).
 
-## Built with
+- `/demo` — sample website that loads `public/sdk/recorder.js` (rrweb + OpenTelemetry)
+- `/dashboard` — recordings list (local single-admin mode, see `src/hooks/useAuth.ts`)
+- `/replay/<visitId>` — replay on the left, traces on the right; traces highlight while
+  their time range (±0.5 s) contains the current playback time.
 
-- TanStack Start
-- TypeScript
-- React
-- Tailwind CSS
+## Tests
+```bash
+npm test
+```
+
+## Optional: retention cleanup
+Set `CRON_SECRET` in `.env`, then call:
+```bash
+curl -X POST http://localhost:8080/api/public/purge -H "Authorization: Bearer <CRON_SECRET>"
+```
+
+## Notes
+- `.npmrc` sets `legacy-peer-deps=true`: the pinned OpenTelemetry packages declare
+  overlapping-but-conflicting peer ranges for `@opentelemetry/api`; without it `npm install` fails.
+- `public/sdk/otel-web.min.js` is a prebuilt bundle of `src/sdk/otel-tracer.ts`.
+- `drizzle/` holds the old PostgreSQL (Supabase) migrations for reference only; MySQL uses
+  `database/mysql-schema.sql`.

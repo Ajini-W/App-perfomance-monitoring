@@ -5,6 +5,19 @@
 //     React/TanStack dedupe, error logger plugins, and sandbox detection (port/host/strictPort).
 // You can pass additional config via defineConfig({ vite: { ... }, etc... }) if needed.
 import { defineConfig } from "@lovable.dev/vite-tanstack-config";
+import { loadEnv } from "vite";
+
+// Vite only exposes VITE_* variables from .env, so server-only settings (MYSQL_*, CRON_SECRET)
+// would never reach process.env and src/lib/mysql.ts would silently fall back to root@localhost.
+// Load them here; variables already set in the shell win over .env.
+const serverEnv = loadEnv(
+  process.env["NODE_ENV"] === "production" ? "production" : "development",
+  process.cwd(),
+  ["MYSQL_", "CRON_"],
+);
+for (const [key, value] of Object.entries(serverEnv)) {
+  if (process.env[key] === undefined) process.env[key] = value;
+}
 
 export default defineConfig({
   tanstackStart: {

@@ -173,6 +173,10 @@
     window.__initOtelTracer({
       serviceName: document.title || "web-browser",
       onSpan: function (span) {
+        // Skip spans for the recorder's own uploads: they are not app traffic, and recording them
+        // made every flush queue another span, so uploads never stopped while the tab was idle.
+        var spanUrl = span && span.attributes && (span.attributes["http.url"] || span.attributes["url.full"]);
+        if (typeof spanUrl === "string" && spanUrl.split("?")[0] === endpoint) return;
         if (visit && !visit.disabled) {
           visit.spans.push(span);
           if (visit.spans.length >= MAX_BATCH) flush(false);
