@@ -78,3 +78,59 @@ VALUES (
   JSON_ARRAY('/demo*'),
   30
 );
+
+
+USE replay_console;
+
+-- 1. Clients Table (Tenants)
+CREATE TABLE IF NOT EXISTS clients (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  name VARCHAR(200) NOT NULL,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  status ENUM('active', 'inactive', 'suspended') NOT NULL DEFAULT 'active',
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  updated_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3) ON UPDATE CURRENT_TIMESTAMP(3)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 2. API Keys Table
+CREATE TABLE IF NOT EXISTS api_keys (
+  id CHAR(36) NOT NULL PRIMARY KEY,
+  client_id CHAR(36) NOT NULL,
+  name VARCHAR(100) NOT NULL DEFAULT 'Default Key',
+  key_prefix VARCHAR(16) NOT NULL,
+  key_hash CHAR(64) NOT NULL,
+  status ENUM('active', 'revoked') NOT NULL DEFAULT 'active',
+  expires_at DATETIME(3) NULL,
+  revoked_at DATETIME(3) NULL,
+  last_used_at DATETIME(3) NULL,
+  created_at DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
+  UNIQUE KEY uq_api_keys_hash (key_hash),
+  KEY idx_api_keys_lookup (key_prefix, status),
+  CONSTRAINT fk_api_keys_client FOREIGN KEY (client_id) REFERENCES clients (id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- 3. Associate Websites with Clients (Preserves existing data)
+-- First create a default admin client if one does not exist
+INSERT IGNORE INTO clients (id, name, email, status)
+VALUES ('10000000-0000-4000-8000-000000000001', 'Default Organization', 'admin@replay.local', 'active');
+
+-- Check if column exists, add client_id
+SET @dbname = DATABASE();
+SET @tablename = "websites";
+SET @columnname = "client_id";
+SET @preparedStatement = (SELECT IF(
+  (
+    SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS
+    WHERE TABLE_SCHEMA = @dbname
+      AND TABLE_NAME = @tablename
+      AND COLUMN_NAME = @columnname
+  ) > 0,
+  "SELECT 1",
+  "ALTER TABLE websites ADD COLUMN client_id CHAR(36) NULL AFTER id, ADD CONSTRAINT fk_websites_client FOREIGN KEY (client_id) REFERENCES clients (id) ON DELETE CASCADE;"
+));
+PREPARE alterIfNotExists FROM @preparedStatement;
+EXECUTE alterIfNotExists;
+DEALLOCATE PREPARE alterIfNotExists;
+
+-- Backfill existing websites (such as Demo Shop) to the default client
+UPDATE websites SET client_id = '10000000-0000-4000-8000-000000000001' WHERE client_id IS NULL;

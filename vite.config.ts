@@ -13,8 +13,9 @@ import { loadEnv } from "vite";
 const serverEnv = loadEnv(
   process.env["NODE_ENV"] === "production" ? "production" : "development",
   process.cwd(),
-  ["MYSQL_", "CRON_"],
+  ["MYSQL_", "CRON_", "ADMIN_"],
 );
+
 for (const [key, value] of Object.entries(serverEnv)) {
   if (process.env[key] === undefined) process.env[key] = value;
 }

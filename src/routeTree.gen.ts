@@ -19,6 +19,7 @@ import { Route as DemoProductsRouteImport } from './routes/demo.products'
 import { Route as ReplayVisitIdRouteImport } from './routes/replay.$visitId'
 import { Route as ApiPublicIngestRouteImport } from './routes/api/public/ingest'
 import { Route as ApiPublicPurgeRouteImport } from './routes/api/public/purge'
+import { Route as ApiPublicV1VisitsRouteImport } from './routes/api/public/v1.visits'
 
 const IndexRoute = IndexRouteImport.update({
   id: '/',
@@ -70,6 +71,11 @@ const ApiPublicPurgeRoute = ApiPublicPurgeRouteImport.update({
   path: '/api/public/purge',
   getParentRoute: () => rootRouteImport,
 } as any)
+const ApiPublicV1VisitsRoute = ApiPublicV1VisitsRouteImport.update({
+  id: '/api/public/v1/visits',
+  path: '/api/public/v1/visits',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
@@ -82,6 +88,7 @@ export interface FileRoutesByFullPath {
   '/demo/': typeof DemoIndexRoute
   '/api/public/ingest': typeof ApiPublicIngestRoute
   '/api/public/purge': typeof ApiPublicPurgeRoute
+  '/api/public/v1/visits': typeof ApiPublicV1VisitsRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
@@ -93,6 +100,7 @@ export interface FileRoutesByTo {
   '/demo': typeof DemoIndexRoute
   '/api/public/ingest': typeof ApiPublicIngestRoute
   '/api/public/purge': typeof ApiPublicPurgeRoute
+  '/api/public/v1/visits': typeof ApiPublicV1VisitsRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -106,6 +114,7 @@ export interface FileRoutesById {
   '/demo/': typeof DemoIndexRoute
   '/api/public/ingest': typeof ApiPublicIngestRoute
   '/api/public/purge': typeof ApiPublicPurgeRoute
+  '/api/public/v1/visits': typeof ApiPublicV1VisitsRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -120,6 +129,7 @@ export interface FileRouteTypes {
     | '/demo/'
     | '/api/public/ingest'
     | '/api/public/purge'
+    | '/api/public/v1/visits'
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
@@ -131,6 +141,7 @@ export interface FileRouteTypes {
     | '/demo'
     | '/api/public/ingest'
     | '/api/public/purge'
+    | '/api/public/v1/visits'
   id:
     | '__root__'
     | '/'
@@ -143,6 +154,7 @@ export interface FileRouteTypes {
     | '/demo/'
     | '/api/public/ingest'
     | '/api/public/purge'
+    | '/api/public/v1/visits'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -153,6 +165,7 @@ export interface RootRouteChildren {
   ReplayVisitIdRoute: typeof ReplayVisitIdRoute
   ApiPublicIngestRoute: typeof ApiPublicIngestRoute
   ApiPublicPurgeRoute: typeof ApiPublicPurgeRoute
+  ApiPublicV1VisitsRoute: typeof ApiPublicV1VisitsRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -227,6 +240,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof ApiPublicPurgeRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/api/public/v1/visits': {
+      id: '/api/public/v1/visits'
+      path: '/api/public/v1/visits'
+      fullPath: '/api/public/v1/visits'
+      preLoaderRoute: typeof ApiPublicV1VisitsRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -252,6 +272,7 @@ const rootRouteChildren: RootRouteChildren = {
   ReplayVisitIdRoute: ReplayVisitIdRoute,
   ApiPublicIngestRoute: ApiPublicIngestRoute,
   ApiPublicPurgeRoute: ApiPublicPurgeRoute,
+  ApiPublicV1VisitsRoute: ApiPublicV1VisitsRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

@@ -101,3 +101,77 @@ export const getReplayData = createServerFn({ method: "GET" })
 
     return { visit, events, spans: formattedSpans };
   });
+
+
+  import { generateApiKey } from "@/lib/api-key-service";
+
+// --- CLIENT & API KEY MANAGEMENT ---
+
+export const getClients = createServerFn({ method: "GET" }).handler(async () => {
+  const [clients]: any = await db.execute(
+    `SELECT c.*, 
+            (SELECT COUNT(*) FROM api_keys k WHERE k.client_id = c.id AND k.status = 'active') AS active_keys_count,
+            (SELECT COUNT(*) FROM websites w WHERE w.client_id = c.id) AS websites_count
+     FROM clients c
+     ORDER BY c.created_at DESC`
+  );
+  return clients;
+});
+
+export const createClient = createServerFn({ method: "POST" })
+  .validator((params: { name: string; email: string }) => params)
+  .handler(async ({ data }) => {
+    const clientId = crypto.randomUUID();
+    await db.execute(
+      "INSERT INTO clients (id, name, email, status) VALUES (?, ?, ?, 'active')",
+      [clientId, data.name, data.email]
+    );
+
+    // Automatically generate first API Key for client
+    const { rawKey, keyPrefix, keyHash } = generateApiKey();
+    const keyId = crypto.randomUUID();
+    await db.execute(
+      `INSERT INTO api_keys (id, client_id, name, key_prefix, key_hash, status)
+       VALUES (?, ?, 'Production Key', ?, ?, 'active')`,
+      [keyId, clientId, keyPrefix, keyHash]
+    );
+
+    // Return the raw key ONCE so the admin can copy and give it to the client
+    return { success: true, clientId, rawKey, keyPrefix };
+  });
+
+export const getClientApiKeys = createServerFn({ method: "GET" })
+  .validator((clientId: string) => clientId)
+  .handler(async ({ data: clientId }) => {
+    const [keys]: any = await db.execute(
+      `SELECT id, name, key_prefix, status, expires_at, revoked_at, last_used_at, created_at
+       FROM api_keys
+       WHERE client_id = ?
+       ORDER BY created_at DESC`,
+      [clientId]
+    );
+    return keys;
+  });
+
+export const revokeApiKeyAction = createServerFn({ method: "POST" })
+  .validator((keyId: string) => keyId)
+  .handler(async ({ data: keyId }) => {
+    await db.execute(
+      "UPDATE api_keys SET status = 'revoked', revoked_at = NOW(3) WHERE id = ?",
+      [keyId]
+    );
+    return { success: true };
+  });
+
+export const regenerateApiKeyAction = createServerFn({ method: "POST" })
+  .validator((params: { clientId: string; keyName: string }) => params)
+  .handler(async ({ data }) => {
+    const { rawKey, keyPrefix, keyHash } = generateApiKey();
+    const keyId = crypto.randomUUID();
+    await db.execute(
+      `INSERT INTO api_keys (id, client_id, name, key_prefix, key_hash, status)
+       VALUES (?, ?, ?, ?, ?, 'active')`,
+      [keyId, data.clientId, data.keyName || "API Key", keyPrefix, keyHash]
+    );
+    return { success: true, rawKey, keyPrefix };
+  });
