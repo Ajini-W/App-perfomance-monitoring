@@ -1,89 +1,110 @@
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { useState } from "react";
+import { createFileRoute, useNavigate } from "@tanstack/react-router";
 import { toast } from "sonner";
+import { loginAdmin } from "@/lib/auth-actions";
+import { useAuth } from "@/hooks/useAuth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { ShieldCheck, Loader2 } from "lucide-react";
 
 export const Route = createFileRoute("/login")({
-  head: () => ({
-    meta: [
-      { title: "Admin sign in — Replay Console" },
-      { name: "description", content: "Sign in to view and replay recorded sessions." },
-      { property: "og:title", content: "Admin sign in — Replay Console" },
-      { property: "og:description", content: "Sign in to view and replay recorded sessions." },
-    ],
-  }),
-  component: Login,
+  component: LoginPage,
 });
 
-function Login() {
+function LoginPage() {
   const navigate = useNavigate();
-  const [mode, setMode] = useState<"in" | "up">("in");
+  const { setSession } = useAuth();
+  
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [busy, setBusy] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
 
-  // Supabase Auth was removed in the MySQL migration. The console currently runs in local
-  // single-admin mode (see src/hooks/useAuth.ts), so the form simply opens the dashboard.
-  const submit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    setBusy(true);
-    if (mode === "up") toast.success("Local mode: no account needed, opening the console.");
-    navigate({ to: "/dashboard" });
-    setBusy(false);
+
+    if (!email.trim() || !password) {
+      toast.error("Please enter both email and password");
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      const result = await loginAdmin({
+        data: { email: email.trim(), password },
+      });
+
+      if (!result.success || !result.user) {
+        toast.error(result.error || "Invalid email or password");
+        return;
+      }
+
+      // 1. Session-ah save panrom
+      setSession(result.user, result.token);
+
+      toast.success(`Welcome back, ${result.user.email}!`);
+
+      // 2. Dashboard-ku navigate panrom
+      navigate({ to: "/dashboard" });
+    } catch (err: any) {
+      toast.error(err?.message || "Failed to sign in. Please check your database connection.");
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
-    <div className="grid min-h-screen md:grid-cols-2">
-      <div className="hidden flex-col justify-end bg-brand p-12 text-sidebar-foreground md:flex">
-        <h1 className="text-4xl">Replay Console</h1>
-        <p className="mt-3 max-w-sm text-sidebar-foreground/80">
-          Only authorised Admins can list, replay, or download recordings.
-        </p>
-      </div>
-      <div className="flex items-center justify-center p-6">
-        <form onSubmit={submit} className="w-full max-w-sm space-y-5">
-          <h2 className="text-3xl">{mode === "in" ? "Sign in" : "Create account"}</h2>
-          {mode === "up" && (
-            <p className="text-sm text-muted-foreground">
-              The very first account becomes the Admin. Later accounts get no access until an Admin
-              grants it.
-            </p>
-          )}
-          <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
-            <Input
-              id="email"
-              type="email"
-              required
-              value={email}
-              onChange={(e) => setEmail(e.target.value)}
-            />
+    <div className="min-h-screen flex items-center justify-center bg-muted/40 p-4">
+      <Card className="w-full max-w-md shadow-lg border-border">
+        <CardHeader className="space-y-1 text-center">
+          <div className="mx-auto w-12 h-12 rounded-full bg-primary/10 flex items-center justify-center text-primary mb-2">
+            <ShieldCheck className="w-6 h-6" />
           </div>
-          <div className="space-y-2">
-            <Label htmlFor="password">Password</Label>
-            <Input
-              id="password"
-              type="password"
-              required
-              minLength={8}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-            />
-          </div>
-          <Button type="submit" className="w-full" disabled={busy}>
-            {mode === "in" ? "Sign in" : "Create account"}
-          </Button>
-          <button
-            type="button"
-            className="text-sm text-primary underline"
-            onClick={() => setMode(mode === "in" ? "up" : "in")}
-          >
-            {mode === "in" ? "No account yet? Create one" : "Have an account? Sign in"}
-          </button>
-        </form>
-      </div>
+          <CardTitle className="text-2xl font-bold tracking-tight">Admin Console</CardTitle>
+          <CardDescription>
+            Enter your credentials to access the Replay Console dashboard
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="email">Admin Email</Label>
+              <Input
+                id="email"
+                type="email"
+                placeholder="admin@company.com"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                disabled={submitting}
+                required
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="password">Password</Label>
+              <Input
+                id="password"
+                type="password"
+                placeholder="••••••••••••"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                disabled={submitting}
+                required
+              />
+            </div>
+            <Button type="submit" className="w-full" disabled={submitting}>
+              {submitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Authenticating...
+                </>
+              ) : (
+                "Sign In"
+              )}
+            </Button>
+          </form>
+        </CardContent>
+      </Card>
     </div>
   );
 }
