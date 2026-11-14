@@ -134,3 +134,15 @@ DEALLOCATE PREPARE alterIfNotExists;
 
 -- Backfill existing websites (such as Demo Shop) to the default client
 UPDATE websites SET client_id = '10000000-0000-4000-8000-000000000001' WHERE client_id IS NULL;
+
+
+
+CREATE TABLE IF NOT EXISTS admin_users (
+  id VARCHAR(36) NOT NULL PRIMARY KEY,
+  email VARCHAR(255) NOT NULL UNIQUE,
+  password_hash VARCHAR(255) NOT NULL,
+  password_salt VARCHAR(64) NOT NULL,
+  role ENUM('admin', 'viewer') NOT NULL DEFAULT 'admin',
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  last_login_at TIMESTAMP NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
