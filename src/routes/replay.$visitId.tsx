@@ -41,6 +41,49 @@ type TelemetrySpan = {
   attributes: Record<string, any>;
 };
 
+// OpenTelemetry attributes-la irunthu endpoint path mattum edukka
+function getSpanEndpoint(span: TelemetrySpan): string {
+  const attrs = span.attributes || {};
+  const raw =
+    attrs["http.target"] ||
+    attrs["url.path"] ||
+    attrs["http.url"] ||
+    attrs["url.full"] ||
+    attrs["endpoint"] ||
+    "";
+
+  if (!raw) return "";
+
+  try {
+    // Full URL aaga irunthaal (eg: http://localhost:8080/api/cart), path mattum edukkom
+    if (typeof raw === "string" && (raw.startsWith("http://") || raw.startsWith("https://"))) {
+      const u = new URL(raw);
+      return u.pathname + (u.search || "");
+    }
+    return String(raw);
+  } catch {
+    return String(raw);
+  }
+}
+
+// HTTP Method (GET, POST, PUT, DELETE) color style
+function getMethodBadgeClass(method: string): string {
+  switch (method.toUpperCase()) {
+    case "GET":
+      return "bg-blue-500/15 text-blue-600 dark:text-blue-400 border-blue-500/30";
+    case "POST":
+      return "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400 border-emerald-500/30";
+    case "PUT":
+    case "PATCH":
+      return "bg-amber-500/15 text-amber-600 dark:text-amber-400 border-amber-500/30";
+    case "DELETE":
+      return "bg-rose-500/15 text-rose-600 dark:text-rose-400 border-rose-500/30";
+    default:
+      return "bg-muted text-muted-foreground border-border";
+  }
+}
+
+
 function Replay() {
   const { visitId } = Route.useParams();
   const [visit, setVisit] = useState<any | null>(null);
@@ -286,30 +329,52 @@ function Replay() {
                         : "hover:bg-muted/50 bg-background"
                   }`}
                 >
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-mono font-medium truncate">{s.name}</span>
-                    <div className="flex items-center gap-1.5 shrink-0">
-                      {/* Span start relative to replay time 0 */}
-                      {replayStart != null && (
-                        <span className="font-mono text-[10px] text-muted-foreground">
-                          {(() => {
-                            const off = spanOffsetMs(s, replayStart) / 1000;
-                            return `${off < 0 ? "−" : "+"}${Math.abs(off).toFixed(2)}s`;
-                          })()}
-                        </span>
-                      )}
-                      <span
-                        className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
-                          s.status?.toLowerCase() === "error"
-                            ? "bg-red-500/20 text-red-600"
-                            : "bg-emerald-500/20 text-emerald-600"
-                        }`}
-                      >
-                        {s.status || "unset"}
-                      </span>
-                      <span className="font-mono text-muted-foreground">{s.duration_ms}ms</span>
-                    </div>
-                  </div>
+                  {/* ✅ Puthu Code: Method + Endpoint Path */}
+                  {(() => {
+                    const endpoint = getSpanEndpoint(s);
+                    const method = (s.attributes?.["http.method"] || s.name || "GET")
+                      .toString()
+                      .replace(/^HTTP\s+/i, "")
+                      .toUpperCase();
+
+                    return (
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0 flex-1">
+                          {/* HTTP Method Badge (GET, PUT, etc.) */}
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-bold font-mono border shrink-0 ${getMethodBadgeClass(
+                              method
+                            )}`}
+                          >
+                            {method}
+                          </span>
+
+                          {/* API Endpoint Path (e.g. /api/products) */}
+                          <span
+                            className="font-mono text-xs text-foreground/90 truncate"
+                            title={endpoint || s.name}
+                          >
+                            {endpoint || s.name}
+                          </span>
+                        </div>
+
+                        {/* Right side: Status Badge + Duration */}
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          <span
+                            className={`px-1.5 py-0.5 rounded text-[10px] font-semibold uppercase ${
+                              s.status?.toLowerCase() === "error"
+                                ? "bg-red-500/20 text-red-600"
+                                : "bg-emerald-500/20 text-emerald-600"
+                            }`}
+                          >
+                            {s.status || "unset"}
+                          </span>
+                          <span className="font-mono text-muted-foreground">{s.duration_ms}ms</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+
 
                   {/* Expanded Span Details */}
                   {selectedSpan?.span_id === s.span_id && (
