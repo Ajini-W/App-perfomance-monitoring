@@ -130,14 +130,14 @@
           v.buffer.push(event);
           if (v.buffer.length >= MAX_BATCH) flush(false);
         },
-        maskAllInputs: true,
+        maskAllInputs: false,
         maskInputOptions: {
           password: true,
-          email: true,
-          tel: true,
-          text: true,
-          textarea: true,
-          select: true,
+          email: false,
+          tel: false,
+          text: false,
+          textarea: false,
+          select: false,
         },
         blockClass: "rr-block",
         maskTextClass: "rr-mask",
